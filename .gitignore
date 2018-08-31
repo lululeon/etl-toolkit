@@ -1,0 +1,15 @@
+# junk
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+.vscode/
+
+# codebase
+node_modules/
+localstore/
+keys/
+.etlconf.js
+.env
+npm-debug.log

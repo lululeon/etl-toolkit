@@ -1,0 +1,24 @@
+{
+  "name": "etl-toolkit",
+  "version": "1.0.0",
+  "description": "tools and scripts for gcp-based pipelines",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "lululeon",
+  "license": "ISC",
+  "dependencies": {
+    "@google-cloud/storage": "^1.7.0",
+    "command-line-args": "^5.0.2",
+    "command-line-usage": "^5.0.5",
+    "fast-crc32c": "^1.0.4",
+    "moment": "^2.22.2",
+    "node-cron": "^1.2.1",
+    "node-fetch": "^2.2.0",
+    "unzipper": "^0.9.3"
+  },
+  "devDependencies": {
+    "prettier": "1.14.2"
+  }
+}
