@@ -18,7 +18,7 @@ const moment = require('moment');
 const fetch = require('node-fetch');
 const storage = require('@google-cloud/storage')(etlconf.gcpConf);
 const ftype = require('./utils/fileTyping');
-//const crc32 = require('fast-crc32c'); //for resumable uploads
+//const crc32 = require('fast-crc32c'); //for resumable uploads... you also need a recent npm global install of node-gyp
 //const GoogleCloudPlatform = require('./utils/gcp'); //not used yet
 
 function filenameTimestamp() {
@@ -72,7 +72,8 @@ function push() {
     const fileType = ftype.getFileTypeFromName(etlconf.push.dataPushFile);
     const rstream = fs.createReadStream(dataSourcePath);
     const theBucket = storage.bucket(etlconf.push.bucket);
-    const wstream = theBucket.file(dataSinkName).createWriteStream({validation:'crc32c'});
+    // const wstream = theBucket.file(dataSinkName).createWriteStream({validation:'crc32c'});
+    const wstream = theBucket.file(dataSinkName).createWriteStream();
     console.log('********** getting ready to stream ************');
     if (fileType === 'zip') {
       console.log('********** unzipping ************');
@@ -95,15 +96,6 @@ function push() {
     });
     wstream.on('finish', () => {
       console.log("Uploaded successfully!!");
-      wstream.getMetadata()
-      .then(metadata => {
-          console.log("File's metadata: ", metadata);
-          return resolve(metadata.mediaLink);
-      })
-      .catch(err => {
-        console.log("Error getting metadata from uploaded file:", err);
-        return reject(err);
-      });
     });
   });
 }
@@ -176,6 +168,7 @@ function main() {
       })
       .catch(err => {
         console.log('sigh. oh dear...');
+        console.log(err);
       })
     }
   }
