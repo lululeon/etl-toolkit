@@ -1,8 +1,7 @@
 #!/usr/bin/env node
-const etlconf = require('../.etlconf.js');
 const commandLineArgs = require('command-line-args'); //TODO: replace with commander
 const commandLineUsage = require('command-line-usage');
-//const w = require('../src/utils/logger'); //winston logger config
+const exec = require('child_process').exec;
 const unzipper = require('unzipper');
 const fs = require('fs');
 const stream = require('stream');
@@ -16,10 +15,10 @@ const moment = require('moment');
 // - res.text(), res.json(), res.blob(), res.arraybuffer(), res.buffer() only.
 // - richer error-handling.
 const fetch = require('node-fetch');
+const etlconf = require('../.etlconf.js');
 const storage = require('@google-cloud/storage')(etlconf.gcpConf);
 const ftype = require('./utils/fileTyping');
 //const crc32 = require('fast-crc32c'); //for resumable uploads... you also need a recent npm global install of node-gyp
-//const GoogleCloudPlatform = require('./utils/gcp'); //not used yet
 
 function filenameTimestamp() {
   return moment().format().slice(0, -6).replace(/T(.+):(.+):(.+)/gi, '\_$1-$2-$3');
@@ -130,6 +129,49 @@ function bounce() {
   });
 }
 
+function cfdeploy(cfname, init=false) {
+  return new Promise((resolve, reject) => {
+    //build env keys for cloudfuncs
+    console.log('process cloud func ', cfname);
+    let envstring;
+    let gcloudCmd;
+    const argsForFirstEverExecution = '';
+  
+    //TODO: stop doing this and use Cloud KMS instead...
+    try {
+      let tmparr =[];
+      Object.keys(etlconf.cloudSQL).forEach(k => {
+        const key = k.toUpperCase();
+        const value = etlconf.cloudSQL[k];
+        tmparr.push(`${key}=${value}`);
+      });
+      envstring = tmparr.join(',');
+    
+      if(init) {
+        if (etlconf.CloudFuncs[cfname].type === 'onStore') {
+          argsForFirstEverExecution += `--trigger-event google.storage.object.finalize --trigger-resource ${etlconf.push.bucket}`;
+        } else {
+          //none others supported at the mo.
+        }
+      }
+      
+      gcloudCmd = `gcloud beta functions deploy ${cfname} --runtime nodejs8 --source ${etlconf.cloudFuncsRemote} --set-env-vars ${envstring} ${argsForFirstEverExecution}`;
+    } catch (err) {
+      console.log('woops... snafu parsing cloudfuncs info!')
+      reject(err);
+    }
+  
+    const child = exec(gcloudCmd, (error, stdout, stderr) => {
+      if (error) {
+          console.error(error);
+          reject(error);
+      }
+      console.log(stdout);
+      resolve('done');
+    });
+  });
+}
+
 /*
 //simulate data changing at some interval
 // cron.schedule('* * * * *', function(){
@@ -162,6 +204,11 @@ function main() {
       name: 'bounce',
       type: Boolean,
       description: 'stream from predefined data source to predefined bucket storage in cloud'
+    },
+    {
+      name: 'cfdeploy',
+      type: String,
+      description: 'provide the name of a cloud functions to deploy from gcp remote repo'
     }
   ];
 
@@ -193,8 +240,11 @@ function main() {
       asyncAction = push();
     } else if (options.bounce) {
       asyncAction = bounce();
+    } else if (options.cfdeploy) {
+      asyncAction = cfdeploy(options.cfdeploy);
     } else {
       console.log('no such command!');
+      console.log(usage);
       return;
     }
 

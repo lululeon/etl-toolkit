@@ -5,11 +5,13 @@ Desktop.ini
 $RECYCLE.BIN/
 .DS_Store
 .vscode/
+_unused/
 
 # codebase
 node_modules/
 localstore/
 keys/
+queries/
 .etlconf.js
 .env
 npm-debug.log
