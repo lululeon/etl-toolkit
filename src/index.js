@@ -64,7 +64,6 @@ function pull() {
 
 function push() {
   return new Promise((resolve, reject) => {
-    //const gcp = new GoogleCloudPlatform(storage);
     const dataSourcePath = path.join(__dirname, '..', 'localstore', path.sep, 'push-from', etlconf.push.dataPushFile);
     const timestamp = filenameTimestamp();
     const dataSinkName = `${etlconf.push.datasetName}-${timestamp}.${etlconf.push.targetFileExt}`;
@@ -172,6 +171,24 @@ function cfdeploy(cfname, init=false) {
   });
 }
 
+function pushsql(sqlfile) {
+  return new Promise((resolve, reject) => {
+    if(!sqlfile) {
+      reject(new Error('no sql file specified!'));
+    }
+    const dataSourcePath = path.join(__dirname, '..', 'sql', path.sep, sqlfile);
+    const dataSinkName = sqlfile;
+    storage.bucket(etlconf.cloudSQL.sqlbucket)
+    .upload(dataSourcePath)
+    .then(()=>{
+      resolve(`${etlconf.cloudSQL.sqlbucket}/${dataSinkName}`);
+    })
+    .catch(err => {
+      reject(err);
+    });
+  });
+}
+
 /*
 //simulate data changing at some interval
 // cron.schedule('* * * * *', function(){
@@ -209,6 +226,11 @@ function main() {
       name: 'cfdeploy',
       type: String,
       description: 'provide the name of a cloud functions to deploy from gcp remote repo'
+    },
+    {
+      name: 'pushsql',
+      type: String,
+      description: 'push sql file to cloud bucket'
     }
   ];
 
@@ -242,6 +264,8 @@ function main() {
       asyncAction = bounce();
     } else if (options.cfdeploy) {
       asyncAction = cfdeploy(options.cfdeploy);
+    } else if (options.pushsql) {
+      asyncAction = pushsql(options.pushsql);
     } else {
       console.log('no such command!');
       console.log(usage);
