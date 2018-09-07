@@ -26,38 +26,39 @@ function filenameTimestamp() {
 }
 
 function pull() {
-  //determine dataSink - TODO: config sanity-checks
-  const timestamp = filenameTimestamp();
-  const dataSink = path.join(__dirname, '..', 'localstore', path.sep, 'pull-to', etlconf.pull.dataSinkName + '-' + timestamp + '.' + etlconf.pull.dataSinkSuffix);
-  console.log(dataSink);
+  return new Promise((resolve, reject) => {
+    //determine dataSink - TODO: config sanity-checks
+    const timestamp = filenameTimestamp();
+    const dataSink = path.join(__dirname, '..', 'localstore', path.sep, 'pull-to', etlconf.pull.dataSinkName + '-' + timestamp + '.' + etlconf.pull.dataSinkSuffix);
 
-  //fetch data (@/localstore presumed writeable!)
-  const wstream = fs.createWriteStream(dataSink, {flags: 'wx', encoding: 'utf-8', mode: 0666});
-  wstream.on('error', err => {
-    console.log('!!!!!!!!!! error creating file for writestream !!!!! Error:', err);
-  });
-  wstream.on('open', () =>  { //you have to wait for the write stream b4 proceeding else file not guaranteed to exist by when you need it.
-    console.log('write stream ready. Beginning Fetch...');
-    fetch(etlconf.pull.dataSourceUrl).then( res => {
-      console.log(res.headers.raw);
-      return new Promise((resolve, reject) => {
+    //fetch data (@/localstore presumed writeable!)
+    const wstream = fs.createWriteStream(dataSink, {flags: 'wx', encoding: 'utf-8', mode: 0666});
+    wstream.on('error', err => {
+      console.log('!!!!!!!!!! error creating file for writestream !!!!! Error:');
+      reject(err);
+    });
+    wstream.on('open', () =>  { //you have to wait for the write stream b4 proceeding else file not guaranteed to exist by when you need it.
+      console.log('write stream ready. Beginning Fetch...');
+      fetch(etlconf.pull.dataSourceUrl).then( res => {
         res.body.pipe(wstream);
         res.body.on('error', err => {
           reject(err);
         });
         wstream.on('finish', () => {
+          console.log('finished writes...');
           resolve(dataSink);
         });
         wstream.on('error', err => {
           reject(err);
         });
+      })
+      .then( () => {
+        console.log('finished fetch...');
+      })
+      .catch( err => {
+        console.log(`Failed to fetch with error type ${err.type} and message ${err.message}`);
+        reject(err);
       });
-    })
-    .then( filepath => {
-      console.log(`fetch complete - data written to [${filepath}]`);
-    })
-    .catch( err => {
-      console.log(`Failed to fetch with error type ${err.type} and message ${err.message}`);
     });
   });
 }
@@ -68,7 +69,6 @@ function push() {
     const dataSourcePath = path.join(__dirname, '..', 'localstore', path.sep, 'push-from', etlconf.push.dataPushFile);
     const timestamp = filenameTimestamp();
     const dataSinkName = `${etlconf.push.datasetName}-${timestamp}.${etlconf.push.targetFileExt}`;
-    console.log(`pushing [${dataSourcePath}] to bucket [${etlconf.push.bucket}/${dataSinkName}]`);
     const fileType = ftype.getFileTypeFromName(etlconf.push.dataPushFile);
     const rstream = fs.createReadStream(dataSourcePath);
     const theBucket = storage.bucket(etlconf.push.bucket);
@@ -96,18 +96,41 @@ function push() {
     });
     wstream.on('finish', () => {
       console.log("Uploaded successfully!!");
+      resolve(`${etlconf.push.bucket}/${dataSinkName}`);
     });
   });
 }
 
+function bounce() {
+  return new Promise((resolve, reject) => {
+    const timestamp = filenameTimestamp();
+    const dataSinkName = `${etlconf.bounce.datasetName}-${timestamp}.${etlconf.bounce.targetFileExt}`;
+    console.log(`bouncing [${etlconf.bounce.dataSourceUrl}] to bucket [${etlconf.bounce.bucket}/${dataSinkName}]`);
+    const theBucket = storage.bucket(etlconf.bounce.bucket);
+    const wstream = theBucket.file(dataSinkName).createWriteStream();
+    console.log('********** prepping bucket for writing ************');
+    wstream.on('error', (err) => {
+      return reject(err);
+    });
+    wstream.on('finish', () => {
+      console.log("Uploaded successfully!!");
+      return resolve(`${etlconf.bounce.bucket}/${dataSinkName}`);
+    });
+
+    console.log('********** getting ready to stream ************');
+    fetch(etlconf.pull.dataSourceUrl)
+    //.then(res => res.body.pipe(process.stdout)) //tho res.body is synchronous, it actually rtns a readable stream. Also rem this is node-fetch, not fetch.
+    .then(res => res.body.pipe(wstream)) //tho res.body is synchronous, it actually rtns a readable stream. Also rem this is node-fetch, not fetch.
+    .then(() => {
+      console.log("reads complete");
+    })
+    .catch(err => {
+      return reject(err);
+    });
+  });
+}
 
 /*
-// fetch('https://www.kaggle.com/kiva/data-science-for-good-kiva-crowdfunding/downloads/kiva_loans.csv/5', {method: 'HEAD'})
-// .then( res => {
-//   console.log(res.headers.raw);
-// });
-
-
 //simulate data changing at some interval
 // cron.schedule('* * * * *', function(){
 //   console.log('running a task every minute');
@@ -134,6 +157,11 @@ function main() {
       name: 'push',
       type: Boolean,
       description: 'push from localstore to predefined bucket storage in cloud'
+    },
+    {
+      name: 'bounce',
+      type: Boolean,
+      description: 'stream from predefined data source to predefined bucket storage in cloud'
     }
   ];
 
@@ -158,19 +186,25 @@ function main() {
     console.log(usage);
     return;
   } else {
-    //set commandline overrides
+    let asyncAction;
     if(options.pull) {
-      pull();
+      asyncAction = pull();
     } else if (options.push) {
-      push()
-      .then(meta => {
-        console.log('DONE!!', meta);
-      })
-      .catch(err => {
-        console.log('sigh. oh dear...');
-        console.log(err);
-      })
+      asyncAction = push();
+    } else if (options.bounce) {
+      asyncAction = bounce();
+    } else {
+      console.log('no such command!');
+      return;
     }
+
+    asyncAction.then(meta => {
+      console.log('DONE!!', meta);
+    })
+    .catch(err => {
+      console.log('sigh. oh dear...');
+      console.log(err);
+    });
   }
 }
 
