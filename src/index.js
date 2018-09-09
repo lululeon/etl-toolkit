@@ -6,7 +6,6 @@ const unzipper = require('unzipper');
 const fs = require('fs');
 const stream = require('stream');
 const path = require('path');
-const cron = require('node-cron');
 const moment = require('moment');
 // cos fetch api isn't actually impld in node
 // main differences from vanilla, client-side fetch:
@@ -74,7 +73,7 @@ function push() {
     const wstream = theBucket.file(dataSinkName).createWriteStream();
     console.log('********** getting ready to stream ************');
     if (fileType === 'zip') {
-      console.log('********** unzipping ************');
+      console.log('********** unzipping ************'); //mayhaps this is backwards... should zip to cloud... more efficient.
       rstream.pipe(unzipper.Parse())
       .on('entry', entry => {
         const fileName = entry.path;
@@ -134,7 +133,7 @@ function cfdeploy(cfname, init=false) {
     console.log('process cloud func ', cfname);
     let envstring;
     let gcloudCmd;
-    const argsForFirstEverExecution = '';
+    let argsForFirstEverExecution = '';
   
     //TODO: stop doing this and use Cloud KMS instead...
     try {
@@ -144,13 +143,19 @@ function cfdeploy(cfname, init=false) {
         const value = etlconf.cloudSQL[k];
         tmparr.push(`${key}=${value}`);
       });
+      tmparr.push(`PROJECTID=${etlconf.gcpConf.projectId}`);
       envstring = tmparr.join(',');
     
       if(init) {
-        if (etlconf.CloudFuncs[cfname].type === 'onStore') {
+        const cftype = etlconf.cloudFuncs[cfname].type;
+        if (cftype === 'onStorage') {
           argsForFirstEverExecution += `--trigger-event google.storage.object.finalize --trigger-resource ${etlconf.push.bucket}`;
+        } else if (cftype === 'onPubSub') {
+          //pretty nifty: it auto creates the topic if it doesnt exist and auto subscribes :)
+          argsForFirstEverExecution += `--trigger-event google.pubsub.topic.publish --trigger-resource ${etlconf.pubsubTopic}`;
         } else {
           //none others supported at the mo.
+          console.log('unknown triggers / resources to configure... defaulting to pub-sub... ');
         }
       }
       
@@ -171,7 +176,7 @@ function cfdeploy(cfname, init=false) {
   });
 }
 
-function pushsql(sqlfile) {
+function pushSQL(sqlfile) {
   return new Promise((resolve, reject) => {
     if(!sqlfile) {
       reject(new Error('no sql file specified!'));
@@ -189,13 +194,26 @@ function pushsql(sqlfile) {
   });
 }
 
-/*
-//simulate data changing at some interval
-// cron.schedule('* * * * *', function(){
-//   console.log('running a task every minute');
-// });
-*/
+function runQuery(sqlfile, options={}) {//opts not impld yet.
+  return new Promise((resolve, reject) => {
+    // Raw invoke: can't be bothered with pubsub yet... but eventually, ideally, pubsub.
+    let dataPayloadAsString = JSON.stringify({ sqlfile });
+    console.log(dataPayloadAsString);
 
+    //see: https://github.com/GoogleCloudPlatform/cloud-functions-emulator/issues/90
+    dataPayloadAsString = dataPayloadAsString.replace(/\"/g, '\\"');
+
+    const gcloudCmd = `gcloud beta functions call etlRunQuery --data="${dataPayloadAsString}"`; 
+    const child = exec(gcloudCmd, (error, stdout, stderr) => {
+      if (error) {
+          console.error(error);
+          reject(error);
+      }
+      console.log(stdout);
+      resolve('done');
+    });
+  });
+}
 
 
 function main() {
@@ -225,12 +243,26 @@ function main() {
     {
       name: 'cfdeploy',
       type: String,
-      description: 'provide the name of a cloud functions to deploy from gcp remote repo'
+      description: `
+        provide the name of a cloud function to deploy from gcp remote repo. Note that the first deployment will be different as
+        the relevant triggers will be setup. For a first deploy, you can pass the --init flag as well. i.e:
+        --cfdeploy --init mycloudfuncname
+      `
+    },
+    {
+      name: 'init',
+      type: Boolean,
+      description: 'see cfdeploy' //TODO: find cmdline options parser with subcommands built in
     },
     {
       name: 'pushsql',
       type: String,
       description: 'push sql file to cloud bucket'
+    },
+    {
+      name: 'runquery',
+      type: String,
+      description: 'remotely execute predefined query in the cloud'
     }
   ];
 
@@ -263,9 +295,11 @@ function main() {
     } else if (options.bounce) {
       asyncAction = bounce();
     } else if (options.cfdeploy) {
-      asyncAction = cfdeploy(options.cfdeploy);
+      asyncAction = cfdeploy(options.cfdeploy, options.init);
     } else if (options.pushsql) {
-      asyncAction = pushsql(options.pushsql);
+      asyncAction = pushSQL(options.pushsql);
+    } else if (options.runquery) {
+      asyncAction = runQuery(options.runquery);
     } else {
       console.log('no such command!');
       console.log(usage);
@@ -276,7 +310,6 @@ function main() {
       console.log('DONE!!', meta);
     })
     .catch(err => {
-      console.log('sigh. oh dear...');
       console.log(err);
     });
   }
